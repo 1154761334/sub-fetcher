@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sub-Fetcher · 极简订阅拉取面板</title>
+  <meta name="description" content="服务端代拉取订阅配置，防止域名因 SNI 阻断被封。" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+  <style>
+    *,*::before,*::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+    :root {
+      --bg: #0b0d10;
+      --surface: #13161c;
+      --surface2: #1a1e27;
+      --border: #242a36;
+      --text: #e4e6eb;
+      --text-dim: #8891a4;
+      --accent: #6c5ce7;
+      --accent-glow: rgba(108,92,231,.35);
+      --green: #00cec9;
+      --red: #ff6b6b;
+      --radius: 12px;
+      --font: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    body {
+      font-family: var(--font);
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+      overflow-x: hidden;
+    }
+
+    /* Ambient glow */
+    body::before {
+      content: '';
+      position: fixed;
+      top: -40%; left: -20%;
+      width: 60vw; height: 60vw;
+      background: radial-gradient(circle, var(--accent-glow) 0%, transparent 70%);
+      pointer-events: none;
+      z-index: 0;
+      animation: drift 20s ease-in-out infinite alternate;
+    }
+    @keyframes drift {
+      0%   { transform: translate(0, 0) scale(1); }
+      100% { transform: translate(30vw, 20vh) scale(1.15); }
+    }
+
+    .card {
+      position: relative;
+      z-index: 1;
+      width: 100%;
+      max-width: 560px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 36px 32px 32px;
+      box-shadow: 0 0 80px rgba(108,92,231,.08);
+    }
+
+    /* Header */
+    .header { text-align: center; margin-bottom: 28px; }
+    .header h1 {
+      font-size: 26px;
+      font-weight: 700;
+      background: linear-gradient(135deg, var(--accent), var(--green));
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      letter-spacing: -.5px;
+    }
+    .header p {
+      font-size: 13px;
+      color: var(--text-dim);
+      margin-top: 6px;
+    }
+
+    /* Form elements */
+    label {
+      display: block;
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: .8px;
+      margin-bottom: 6px;
+    }
+
+    .field + .field { margin-top: 18px; }
+
+    select, input[type="text"] {
+      width: 100%;
+      padding: 12px 14px;
+      font-family: var(--font);
+      font-size: 14px;
+      color: var(--text);
+      background: var(--surface2);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      outline: none;
+      transition: border-color .2s, box-shadow .2s;
+      -webkit-appearance: none;
+    }
+    select:focus, input[type="text"]:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-glow);
+    }
+    select { cursor: pointer; }
+    select option { background: var(--surface2); color: var(--text); }
+
+    /* Primary button */
+    .btn-primary {
+      margin-top: 24px;
+      width: 100%;
+      padding: 13px 0;
+      font-family: var(--font);
+      font-size: 14px;
+      font-weight: 600;
+      color: #fff;
+      background: linear-gradient(135deg, var(--accent), #7c5ce7);
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+      transition: transform .15s, box-shadow .25s;
+    }
+    .btn-primary:hover:not(:disabled) {
+      transform: translateY(-1px);
+      box-shadow: 0 6px 24px var(--accent-glow);
+    }
+    .btn-primary:active:not(:disabled) { transform: translateY(0); }
+    .btn-primary:disabled {
+      opacity: .6;
+      cursor: not-allowed;
+    }
+
+    /* Shimmer on loading */
+    .btn-primary.loading::after {
+      content: '';
+      position: absolute;
+      inset: 0;
+      background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.15) 50%, transparent 100%);
+      animation: shimmer 1.2s infinite;
+    }
+    @keyframes shimmer {
+      0%   { transform: translateX(-100%); }
+      100% { transform: translateX(100%); }
+    }
+
+    /* Result area */
+    .result-area {
+      margin-top: 24px;
+      display: none;
+      animation: fadeUp .35s ease-out;
+    }
+    .result-area.visible { display: block; }
+
+    @keyframes fadeUp {
+      from { opacity: 0; transform: translateY(8px); }
+      to   { opacity: 1; transform: translateY(0); }
+    }
+
+    .result-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .result-header span {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text-dim);
+      text-transform: uppercase;
+      letter-spacing: .8px;
+    }
+
+    .btn-copy {
+      padding: 6px 14px;
+      font-family: var(--font);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--green);
+      background: rgba(0,206,201,.1);
+      border: 1px solid rgba(0,206,201,.25);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background .2s, transform .15s;
+    }
+    .btn-copy:hover { background: rgba(0,206,201,.18); transform: translateY(-1px); }
+    .btn-copy.copied {
+      color: #fff;
+      background: var(--green);
+      border-color: var(--green);
+    }
+
+    .btn-download {
+      padding: 6px 14px;
+      font-family: var(--font);
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--accent);
+      background: rgba(108,92,231,.1);
+      border: 1px solid rgba(108,92,231,.25);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background .2s, transform .15s, color .2s;
+    }
+    .btn-download:hover { background: rgba(108,92,231,.2); transform: translateY(-1px); }
+    .btn-download.downloaded {
+      color: #fff;
+      background: var(--accent);
+      border-color: var(--accent);
+    }
+
+    .result-actions {
+      display: flex;
+      gap: 8px;
+    }
+
+    textarea {
+      width: 100%;
+      height: 260px;
+      padding: 14px;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      line-height: 1.6;
+      color: var(--text);
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      resize: vertical;
+      outline: none;
+    }
+
+    /* Error toast */
+    .error-msg {
+      margin-top: 16px;
+      padding: 12px 16px;
+      font-size: 13px;
+      color: var(--red);
+      background: rgba(255,107,107,.08);
+      border: 1px solid rgba(255,107,107,.2);
+      border-radius: 8px;
+      display: none;
+      animation: fadeUp .3s ease-out;
+    }
+    .error-msg.visible { display: block; }
+
+    /* Responsive */
+    @media (max-width: 480px) {
+      .card { padding: 24px 18px 22px; }
+      .header h1 { font-size: 22px; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="card">
+  <div class="header">
+    <h1>Sub-Fetcher</h1>
+    <p>极简订阅拉取面板 · 服务端代拉取</p>
+  </div>
+
+  <div class="field">
+    <label for="client-select">客户端类型</label>
+    <select id="client-select">
+      <option value="clash">Clash (Verge / Meta)</option>
+      <option value="v2ray">v2rayN</option>
+      <option value="singbox">sing-box</option>
+      <option value="surge">Surge</option>
+    </select>
+  </div>
+
+  <div class="field">
+    <label for="url-input">订阅链接</label>
+    <input type="text" id="url-input" placeholder="请输入原始订阅链接..." autocomplete="off" spellcheck="false" />
+  </div>
+
+  <button class="btn-primary" id="fetch-btn" type="button">生成并获取配置</button>
+
+  <div class="error-msg" id="error-msg"></div>
+
+  <div class="result-area" id="result-area">
+    <div class="result-header">
+      <span>配置内容</span>
+      <div class="result-actions">
+        <button class="btn-copy" id="copy-btn" type="button">一键复制</button>
+        <button class="btn-download" id="download-btn" type="button">⬇️ 下载配置</button>
+      </div>
+    </div>
+    <textarea id="result-text" readonly></textarea>
+  </div>
+</div>
+
+<script>
+  const fetchBtn     = document.getElementById('fetch-btn');
+  const copyBtn      = document.getElementById('copy-btn');
+  const downloadBtn  = document.getElementById('download-btn');
+  const clientSel    = document.getElementById('client-select');
+  const urlInput     = document.getElementById('url-input');
+  const resultArea   = document.getElementById('result-area');
+  const resultText   = document.getElementById('result-text');
+  const errorMsg     = document.getElementById('error-msg');
+
+  // File extension & name mapping by client type
+  const FILE_MAP = {
+    clash:   { ext: '.yaml', name: 'clash_config' },
+    v2ray:   { ext: '.txt',  name: 'v2ray_nodes' },
+    singbox: { ext: '.json', name: 'singbox_config' },
+    surge:   { ext: '.conf', name: 'surge_config' },
+  };
+
+  function showError(msg) {
+    errorMsg.textContent = msg;
+    errorMsg.classList.add('visible');
+    resultArea.classList.remove('visible');
+  }
+  function hideError() {
+    errorMsg.classList.remove('visible');
+  }
+
+  fetchBtn.addEventListener('click', async () => {
+    const url    = urlInput.value.trim();
+    const client = clientSel.value;
+
+    if (!url) {
+      showError('请输入订阅链接');
+      return;
+    }
+
+    try { new URL(url); } catch {
+      showError('订阅链接格式不正确，请输入完整的 URL');
+      return;
+    }
+
+    hideError();
+    resultArea.classList.remove('visible');
+    fetchBtn.disabled = true;
+    fetchBtn.classList.add('loading');
+    fetchBtn.textContent = '正在获取...';
+
+    try {
+      const apiUrl = `api/fetch?client=${encodeURIComponent(client)}&url=${encodeURIComponent(url)}`;
+      const resp = await fetch(apiUrl);
+
+      if (!resp.ok) {
+        let errText;
+        try {
+          const j = await resp.json();
+          errText = j.error;
+        } catch {
+          errText = `HTTP ${resp.status}`;
+        }
+        showError(errText || '请求失败');
+        return;
+      }
+
+      const text = await resp.text();
+      resultText.value = text;
+      resultArea.classList.remove('visible');
+      // Force reflow for animation replay
+      void resultArea.offsetWidth;
+      resultArea.classList.add('visible');
+    } catch (err) {
+      showError('网络错误: ' + err.message);
+    } finally {
+      fetchBtn.disabled = false;
+      fetchBtn.classList.remove('loading');
+      fetchBtn.textContent = '生成并获取配置';
+    }
+  });
+
+  copyBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(resultText.value);
+      copyBtn.textContent = '已复制 ✓';
+      copyBtn.classList.add('copied');
+      setTimeout(() => {
+        copyBtn.textContent = '一键复制';
+        copyBtn.classList.remove('copied');
+      }, 2000);
+    } catch {
+      // Fallback
+      resultText.select();
+      document.execCommand('copy');
+      copyBtn.textContent = '已复制 ✓';
+      copyBtn.classList.add('copied');
+      setTimeout(() => {
+        copyBtn.textContent = '一键复制';
+        copyBtn.classList.remove('copied');
+      }, 2000);
+    }
+  });
+
+  // Download button — pure frontend, zero network requests
+  downloadBtn.addEventListener('click', () => {
+    const content = resultText.value;
+    if (!content) return;
+
+    const client = clientSel.value;
+    const meta = FILE_MAP[client] || { ext: '.txt', name: 'proxy_config' };
+    const filename = meta.name + meta.ext;
+
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    // Visual feedback
+    downloadBtn.textContent = '✅ 已下载';
+    downloadBtn.classList.add('downloaded');
+    setTimeout(() => {
+      downloadBtn.textContent = '⬇️ 下载配置';
+      downloadBtn.classList.remove('downloaded');
+    }, 2000);
+  });
+
+  // Enter key triggers fetch
+  urlInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') fetchBtn.click();
+  });
+</script>
+
+</body>
+</html>
